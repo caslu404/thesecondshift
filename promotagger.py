@@ -12,7 +12,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
 
 # =========================
@@ -385,7 +384,6 @@ class ScrapeResult:
     pix_price: Optional[str]
     pix_pct: Optional[int]
     coupons: List[str]
-    screenshot_b64: Optional[str]
     confidence: int
     confidence_class: str
     elapsed: float
@@ -409,9 +407,10 @@ def _make_driver() -> webdriver.Chrome:
 
     driver_path = os.environ.get("CHROMEDRIVER_PATH") or which("chromedriver")
     if driver_path:
-      return webdriver.Chrome(service=Service(driver_path), options=opts)
+        return webdriver.Chrome(service=Service(driver_path), options=opts)
 
     raise RuntimeError("chromedriver não encontrado no ambiente. Verifique o Dockerfile.")
+
 
 def _close_popups_if_any(driver: webdriver.Chrome):
     try:
@@ -456,13 +455,6 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
         pix_price = _padronizar_rs(pix_price)
 
         coupons = _extract_coupons(soup)
-
-        try:
-            driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(0.15)
-        except:
-            pass
-        screenshot_b64 = None
 
         title_ok = bool(title and "NÃO ENCONTRADO" not in title)
         price_ok = bool(por_total and _extrair_float_brl(por_total))
@@ -525,7 +517,6 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
             pix_price=pix_price,
             pix_pct=pix_pct,
             coupons=coupons,
-            screenshot_b64=screenshot_b64,
             confidence=confidence,
             confidence_class=conf_class,
             elapsed=time.time() - t0,
@@ -547,7 +538,6 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
             pix_price=None,
             pix_pct=None,
             coupons=[],
-            screenshot_b64=None,
             confidence=0,
             confidence_class="bad",
             elapsed=time.time() - t0,
@@ -670,28 +660,7 @@ TEMPLATE = r"""
       box-shadow:0 10px 20px rgba(2,6,23,0.08);
     }
 
-    .grid{ display:grid; grid-template-columns:200px 1fr; gap:12px; margin-top:12px; }
-    @media (max-width:980px){ .grid{ grid-template-columns:1fr; } }
-
-    .shotWrap{
-      background:rgba(15,23,42,0.03);
-      border:1px solid rgba(15,23,42,0.08);
-      border-radius:14px;
-      padding:10px;
-      display:flex; flex-direction:column; gap:8px; align-items:center;
-    }
-    .shotWrap .hint{ font-size:11px; color:rgba(15,23,42,0.55); font-weight:800; }
-
-    .print-thumb{
-      width:100%;
-      max-width:120px;
-      border-radius:10px;
-      cursor:zoom-in;
-      border:1px solid rgba(15,23,42,0.10);
-      box-shadow:0 10px 24px rgba(2,6,23,0.10);
-      transition:transform 0.2s ease;
-    }
-    .print-thumb:hover{ transform:scale(1.02); }
+    .grid{ display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px; }
 
     .codeOut{
       width:100%; min-height:130px; box-sizing:border-box;
@@ -732,44 +701,6 @@ TEMPLATE = r"""
       animation:spin 0.9s linear infinite;
     }
     @keyframes spin{ to{ transform:rotate(360deg); } }
-
-    #imgModal{
-      display:none;
-      position:fixed;
-      inset:0;
-      z-index:10000;
-      background:rgba(0,0,0,0.75);
-      padding:18px;
-      overflow:auto;
-    }
-    #imgModal.active{ display:block; }
-
-    .modalInner{
-      min-height:100%;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      pointer-events:none;
-    }
-
-    #modalImage{
-      pointer-events:auto;
-      max-width:85vw;
-      max-height:85vh;
-      border-radius:12px;
-      box-shadow:0 0 40px rgba(0,0,0,0.55);
-      cursor:zoom-in;
-      transform:scale(1);
-      transform-origin:center center;
-      transition:transform 0.15s ease;
-    }
-
-    #modalImage.zoomed{
-      cursor:zoom-out;
-      max-width:none;
-      max-height:none;
-      transform:scale(1.1);
-    }
   </style>
 </head>
 <body>
@@ -837,15 +768,6 @@ TEMPLATE = r"""
             </div>
 
             <div class="grid">
-              <div class="shotWrap">
-                <div class="hint">Clique para ampliar</div>
-                {% if r.screenshot_b64 %}
-                  <img class="print-thumb" src="data:image/jpeg;base64,{{ r.screenshot_b64 }}" onclick="openModal(this.src)" alt="Print PDP">
-                {% else %}
-                  <div class="hint">Sem print disponível</div>
-                {% endif %}
-              </div>
-
               <div>
                 {% if r.ok %}
                   <textarea readonly id="blk-{{ loop.index0 }}" class="codeOut">{{ r.block }}</textarea>
@@ -861,12 +783,6 @@ TEMPLATE = r"""
         {% endfor %}
       </div>
     {% endif %}
-  </div>
-
-  <div id="imgModal" onclick="closeModal()">
-    <div class="modalInner">
-      <img id="modalImage" alt="Print ampliado" onclick="toggleZoom(event)">
-    </div>
   </div>
 
   <script>
@@ -927,35 +843,6 @@ TEMPLATE = r"""
       el.setSelectionRange(0, 999999);
       navigator.clipboard.writeText(el.value);
     }
-
-    function openModal(src){
-      const modal = document.getElementById('imgModal');
-      const img = document.getElementById('modalImage');
-      img.src = src;
-      img.classList.remove('zoomed');
-      modal.classList.add('active');
-      modal.scrollTop = 0;
-      modal.scrollLeft = 0;
-    }
-
-    function toggleZoom(e){
-      e.stopPropagation();
-      const img = document.getElementById('modalImage');
-      img.classList.toggle('zoomed');
-    }
-
-    function closeModal(){
-      document.getElementById('imgModal').classList.remove('active');
-    }
-
-    document.addEventListener("keydown", function(e){
-        if(e.key === "Escape"){
-            const modal = document.getElementById('imgModal');
-            if(modal.classList.contains('active')){
-                modal.classList.remove('active');
-            }
-        }
-    });
   </script>
 </body>
 </html>
@@ -1004,6 +891,7 @@ def index():
         tag_a=TAG_A,
         tag_b=TAG_B,
     )
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5010"))
