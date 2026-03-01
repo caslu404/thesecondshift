@@ -462,7 +462,7 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
             time.sleep(0.15)
         except:
             pass
-        screenshot_b64 = driver.get_screenshot_as_base64()
+        screenshot_b64 = None
 
         title_ok = bool(title and "NÃO ENCONTRADO" not in title)
         price_ok = bool(por_total and _extrair_float_brl(por_total))
