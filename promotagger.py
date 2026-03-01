@@ -613,7 +613,7 @@ TEMPLATE = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>PromoTagger</title>
+  <title>The Second Shift</title>
   <style>
     :root{
       --bg1:#fff7ed; --bg2:#ffedd5;
