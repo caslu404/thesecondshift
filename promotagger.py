@@ -12,6 +12,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
 # =========================
@@ -94,10 +95,6 @@ def _extract_title(soup: BeautifulSoup) -> str:
 
 
 def _extract_price_to_pay_total(soup: BeautifulSoup) -> Optional[str]:
-    """
-    Pega APENAS o preço principal (priceToPay/corePrice), sem misturar com DE ou outros R$.
-    Não escolhe "maior". Ele segue prioridade de seletores específicos.
-    """
     selectors = [
         "div.a-section.apex-core-price-identifier span.a-price.priceToPay.apex-pricetopay-value span.a-offscreen",
         "span.a-price.priceToPay.apex-pricetopay-value span.a-offscreen",
@@ -157,11 +154,6 @@ def _extract_savings_percent_dom(soup: BeautifulSoup) -> Optional[int]:
 
 
 def _extract_installments(soup: BeautifulSoup) -> Tuple[Optional[str], Optional[int], Optional[str]]:
-    """
-    Retorna (total_a_prazo, n_parcelas, valor_parcela)
-    Ex esperado:
-      "ou R$ 3.887,67 em até 12x de R$ 324,00 sem juros"
-    """
     bloco = soup.find("div", id="installmentCalculator_feature_div")
     if bloco:
         offer = bloco.find("span", id=re.compile(r"^best-offer-string"))
@@ -384,6 +376,7 @@ class ScrapeResult:
     pix_price: Optional[str]
     pix_pct: Optional[int]
     coupons: List[str]
+    screenshot_b64: Optional[str]
     confidence: int
     confidence_class: str
     elapsed: float
@@ -391,25 +384,80 @@ class ScrapeResult:
     block: str
 
 
+def _apply_fast_load_rules(driver: webdriver.Chrome) -> None:
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd(
+            "Network.setBlockedURLs",
+            {
+                "urls": [
+                    "*.png",
+                    "*.jpg",
+                    "*.jpeg",
+                    "*.gif",
+                    "*.webp",
+                    "*.svg",
+                    "*.ico",
+                    "*.css",
+                    "*.woff",
+                    "*.woff2",
+                    "*.ttf",
+                    "*.otf",
+                    "*.mp4",
+                    "*.m4v",
+                    "*.webm",
+                ]
+            },
+        )
+    except Exception:
+        pass
+
+
 def _make_driver() -> webdriver.Chrome:
     opts = webdriver.ChromeOptions()
     opts.add_argument("--headless=new")
-    opts.add_argument("--window-size=1400,1800")
+    opts.add_argument("--window-size=1200,1400")
     opts.add_argument(f"user-agent={UA}")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-background-networking")
+    opts.add_argument("--disable-sync")
+    opts.add_argument("--no-first-run")
+    opts.add_argument("--no-default-browser-check")
+    opts.add_argument("--disable-notifications")
+    opts.add_argument("--disable-popup-blocking")
+    opts.add_argument("--disable-features=Translate,BackForwardCache,AcceptCHFrame")
     opts.page_load_strategy = "eager"
 
-    chrome_bin = os.environ.get("CHROME_BIN") or which("chromium") or which("chromium-browser") or which("google-chrome")
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+        "profile.default_content_setting_values.notifications": 2,
+    }
+    opts.add_experimental_option("prefs", prefs)
+
+    chrome_bin = (
+        os.environ.get("CHROME_BIN")
+        or which("chromium")
+        or which("chromium-browser")
+        or which("google-chrome")
+    )
     if chrome_bin:
         opts.binary_location = chrome_bin
 
     driver_path = os.environ.get("CHROMEDRIVER_PATH") or which("chromedriver")
-    if driver_path:
-        return webdriver.Chrome(service=Service(driver_path), options=opts)
+    if not driver_path:
+        raise RuntimeError("chromedriver não encontrado no ambiente. Verifique o Dockerfile.")
 
-    raise RuntimeError("chromedriver não encontrado no ambiente. Verifique o Dockerfile.")
+    driver = webdriver.Chrome(service=Service(driver_path), options=opts)
+    try:
+        driver.set_page_load_timeout(22)
+    except Exception:
+        pass
+
+    _apply_fast_load_rules(driver)
+    return driver
 
 
 def _close_popups_if_any(driver: webdriver.Chrome):
@@ -417,7 +465,7 @@ def _close_popups_if_any(driver: webdriver.Chrome):
         btns = driver.find_elements(By.XPATH, "//button[contains(., 'Continuar comprando')]")
         if btns:
             btns[0].click()
-            time.sleep(0.2)
+            time.sleep(0.15)
     except:
         pass
 
@@ -426,15 +474,24 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
     t0 = time.time()
     url = f"https://www.amazon.com.br/dp/{asin}"
     try:
-        driver.get(url)
+        try:
+            driver.get(url)
+        except TimeoutException:
+            pass
+
         _close_popups_if_any(driver)
 
         try:
-            WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.ID, "productTitle")))
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "productTitle")))
         except:
             pass
 
-        time.sleep(0.6)
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+
+        time.sleep(0.15)
 
         html = driver.page_source
         soup = BeautifulSoup(html, "html.parser")
@@ -455,6 +512,8 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
         pix_price = _padronizar_rs(pix_price)
 
         coupons = _extract_coupons(soup)
+
+        screenshot_b64 = None
 
         title_ok = bool(title and "NÃO ENCONTRADO" not in title)
         price_ok = bool(por_total and _extrair_float_brl(por_total))
@@ -517,6 +576,7 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
             pix_price=pix_price,
             pix_pct=pix_pct,
             coupons=coupons,
+            screenshot_b64=screenshot_b64,
             confidence=confidence,
             confidence_class=conf_class,
             elapsed=time.time() - t0,
@@ -538,6 +598,7 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
             pix_price=None,
             pix_pct=None,
             coupons=[],
+            screenshot_b64=None,
             confidence=0,
             confidence_class="bad",
             elapsed=time.time() - t0,
@@ -660,7 +721,28 @@ TEMPLATE = r"""
       box-shadow:0 10px 20px rgba(2,6,23,0.08);
     }
 
-    .grid{ display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px; }
+    .grid{ display:grid; grid-template-columns:200px 1fr; gap:12px; margin-top:12px; }
+    @media (max-width:980px){ .grid{ grid-template-columns:1fr; } }
+
+    .shotWrap{
+      background:rgba(15,23,42,0.03);
+      border:1px solid rgba(15,23,42,0.08);
+      border-radius:14px;
+      padding:10px;
+      display:flex; flex-direction:column; gap:8px; align-items:center;
+    }
+    .shotWrap .hint{ font-size:11px; color:rgba(15,23,42,0.55); font-weight:800; }
+
+    .print-thumb{
+      width:100%;
+      max-width:120px;
+      border-radius:10px;
+      cursor:zoom-in;
+      border:1px solid rgba(15,23,42,0.10);
+      box-shadow:0 10px 24px rgba(2,6,23,0.10);
+      transition:transform 0.2s ease;
+    }
+    .print-thumb:hover{ transform:scale(1.02); }
 
     .codeOut{
       width:100%; min-height:130px; box-sizing:border-box;
@@ -701,6 +783,44 @@ TEMPLATE = r"""
       animation:spin 0.9s linear infinite;
     }
     @keyframes spin{ to{ transform:rotate(360deg); } }
+
+    #imgModal{
+      display:none;
+      position:fixed;
+      inset:0;
+      z-index:10000;
+      background:rgba(0,0,0,0.75);
+      padding:18px;
+      overflow:auto;
+    }
+    #imgModal.active{ display:block; }
+
+    .modalInner{
+      min-height:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      pointer-events:none;
+    }
+
+    #modalImage{
+      pointer-events:auto;
+      max-width:85vw;
+      max-height:85vh;
+      border-radius:12px;
+      box-shadow:0 0 40px rgba(0,0,0,0.55);
+      cursor:zoom-in;
+      transform:scale(1);
+      transform-origin:center center;
+      transition:transform 0.15s ease;
+    }
+
+    #modalImage.zoomed{
+      cursor:zoom-out;
+      max-width:none;
+      max-height:none;
+      transform:scale(1.1);
+    }
   </style>
 </head>
 <body>
@@ -768,6 +888,15 @@ TEMPLATE = r"""
             </div>
 
             <div class="grid">
+              <div class="shotWrap">
+                <div class="hint">Clique para ampliar</div>
+                {% if r.screenshot_b64 %}
+                  <img class="print-thumb" src="data:image/jpeg;base64,{{ r.screenshot_b64 }}" onclick="openModal(this.src)" alt="Print PDP">
+                {% else %}
+                  <div class="hint">Sem print disponível</div>
+                {% endif %}
+              </div>
+
               <div>
                 {% if r.ok %}
                   <textarea readonly id="blk-{{ loop.index0 }}" class="codeOut">{{ r.block }}</textarea>
@@ -783,6 +912,12 @@ TEMPLATE = r"""
         {% endfor %}
       </div>
     {% endif %}
+  </div>
+
+  <div id="imgModal" onclick="closeModal()">
+    <div class="modalInner">
+      <img id="modalImage" alt="Print ampliado" onclick="toggleZoom(event)">
+    </div>
   </div>
 
   <script>
@@ -843,6 +978,35 @@ TEMPLATE = r"""
       el.setSelectionRange(0, 999999);
       navigator.clipboard.writeText(el.value);
     }
+
+    function openModal(src){
+      const modal = document.getElementById('imgModal');
+      const img = document.getElementById('modalImage');
+      img.src = src;
+      img.classList.remove('zoomed');
+      modal.classList.add('active');
+      modal.scrollTop = 0;
+      modal.scrollLeft = 0;
+    }
+
+    function toggleZoom(e){
+      e.stopPropagation();
+      const img = document.getElementById('modalImage');
+      img.classList.toggle('zoomed');
+    }
+
+    function closeModal(){
+      document.getElementById('imgModal').classList.remove('active');
+    }
+
+    document.addEventListener("keydown", function(e){
+        if(e.key === "Escape"){
+            const modal = document.getElementById('imgModal');
+            if(modal.classList.contains('active')){
+                modal.classList.remove('active');
+            }
+        }
+    });
   </script>
 </body>
 </html>
