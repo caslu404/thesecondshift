@@ -20,6 +20,7 @@ from selenium.common.exceptions import TimeoutException
 # =========================
 TAG_A = "01l98f-20"
 TAG_B = "xiwhd-20"
+TAG_C = "chvs-20"
 MAX_ASINS = 30
 
 UA = (
@@ -384,7 +385,6 @@ class ScrapeResult:
 
 
 def _apply_fast_rules(driver: webdriver.Chrome) -> None:
-    # Bloqueia assets pesados (mas mantém JS) para o DOM/strings continuarem vindo.
     try:
         driver.execute_cdp_cmd("Network.enable", {})
         driver.execute_cdp_cmd(
@@ -418,8 +418,6 @@ def _make_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-notifications")
     opts.add_argument("--disable-popup-blocking")
     opts.add_argument("--disable-features=Translate,BackForwardCache,AcceptCHFrame")
-
-    # CHAVE: não espera load completo
     opts.page_load_strategy = "none"
 
     prefs = {
@@ -470,12 +468,10 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
         try:
             driver.get(url)
         except TimeoutException:
-            # com page_load_strategy=none isso pode acontecer menos, mas se acontecer, seguimos
             pass
 
         _close_popups_if_any(driver)
 
-        # Espera só pelo que importa
         try:
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "productTitle"))
@@ -483,13 +479,11 @@ def scrapar_asin(driver: webdriver.Chrome, asin: str, tag: str) -> ScrapeResult:
         except:
             pass
 
-        # Corta o resto do carregamento imediatamente
         try:
             driver.execute_script("window.stop();")
         except:
             pass
 
-        # micro sleep só pra estabilizar page_source
         time.sleep(0.05)
 
         html = driver.page_source
@@ -651,7 +645,7 @@ TEMPLATE = r"""
 
     .toggleWrap{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
     .toggle{
-      width:min(360px, 92vw); height:40px;
+      width:min(520px, 92vw); height:40px;
       background:rgba(15,23,42,0.06);
       border:1px solid rgba(15,23,42,0.10);
       border-radius:999px; position:relative; cursor:pointer; user-select:none;
@@ -659,15 +653,18 @@ TEMPLATE = r"""
     }
     .toggleKnob{
       position:absolute; top:3px; left:3px;
-      width:calc(50% - 3px); height:calc(100% - 6px);
+      width:calc(33.333% - 3px); height:calc(100% - 6px);
       border-radius:999px;
       background:linear-gradient(135deg, var(--accent), var(--accent2));
       box-shadow:0 8px 18px rgba(0,0,0,0.10);
       transition:transform 0.25s ease;
     }
     .toggle.isB .toggleKnob{ transform:translateX(100%); }
+    .toggle.isC .toggleKnob{ transform:translateX(200%); }
+
     .toggle span{
-      width:50%; text-align:center; font-size:12px; font-weight:900;
+      width:33.333%;
+      text-align:center; font-size:12px; font-weight:900;
       color:rgba(15,23,42,0.55); z-index:2;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
       padding:0 10px;
@@ -772,10 +769,11 @@ TEMPLATE = r"""
       <h1 class="title">The Second Shift</h1>
 
       <div class="toggleWrap">
-        <div id="tagToggle" class="toggle {% if selected_tag == tag_b %}isB{% endif %}" role="button" tabindex="0">
+        <div id="tagToggle" class="toggle {% if selected_tag == tag_b %}isB{% elif selected_tag == tag_c %}isC{% endif %}" role="button" tabindex="0">
           <div class="toggleKnob"></div>
           <span id="lblA" class="{% if selected_tag == tag_a %}active{% endif %}">{{ tag_a }}</span>
           <span id="lblB" class="{% if selected_tag == tag_b %}active{% endif %}">{{ tag_b }}</span>
+          <span id="lblC" class="{% if selected_tag == tag_c %}active{% endif %}">{{ tag_c }}</span>
         </div>
       </div>
     </div>
@@ -844,6 +842,7 @@ TEMPLATE = r"""
   <script>
     const TAG_A = "{{ tag_a }}";
     const TAG_B = "{{ tag_b }}";
+    const TAG_C = "{{ tag_c }}";
 
     function applyTheme(tag){
       const root = document.documentElement;
@@ -853,6 +852,12 @@ TEMPLATE = r"""
         root.style.setProperty('--accent', '#ec4899');
         root.style.setProperty('--accent2', '#fb7185');
         root.style.setProperty('--accentDark', '#be185d');
+      }else if(tag === TAG_C){
+        root.style.setProperty('--bg1', '#f5f3ff');
+        root.style.setProperty('--bg2', '#ede9fe');
+        root.style.setProperty('--accent', '#7c3aed');
+        root.style.setProperty('--accent2', '#a78bfa');
+        root.style.setProperty('--accentDark', '#5b21b6');
       }else{
         root.style.setProperty('--bg1', '#fff7ed');
         root.style.setProperty('--bg2', '#ffedd5');
@@ -866,16 +871,24 @@ TEMPLATE = r"""
       const toggle = document.getElementById('tagToggle');
       const lblA = document.getElementById('lblA');
       const lblB = document.getElementById('lblB');
+      const lblC = document.getElementById('lblC');
+
+      toggle.classList.remove('isB');
+      toggle.classList.remove('isC');
+      lblA.classList.remove('active');
+      lblB.classList.remove('active');
+      lblC.classList.remove('active');
 
       if(tag === TAG_B){
         toggle.classList.add('isB');
-        lblA.classList.remove('active');
         lblB.classList.add('active');
+      }else if(tag === TAG_C){
+        toggle.classList.add('isC');
+        lblC.classList.add('active');
       }else{
-        toggle.classList.remove('isB');
-        lblB.classList.remove('active');
         lblA.classList.add('active');
       }
+
       document.getElementById('selected_tag').value = tag;
       applyTheme(tag);
     }
@@ -884,7 +897,7 @@ TEMPLATE = r"""
 
     document.getElementById('tagToggle').addEventListener('click', () => {
       const cur = document.getElementById('selected_tag').value;
-      const next = (cur === TAG_A) ? TAG_B : TAG_A;
+      const next = (cur === TAG_A) ? TAG_B : (cur === TAG_B) ? TAG_C : TAG_A;
       setToggleUI(next);
     });
 
@@ -917,7 +930,7 @@ def index():
     if request.method == "POST":
         input_text = request.form.get("input_text", "") or ""
         selected_tag = request.form.get("selected_tag", TAG_A) or TAG_A
-        if selected_tag not in (TAG_A, TAG_B):
+        if selected_tag not in (TAG_A, TAG_B, TAG_C):
             selected_tag = TAG_A
 
         asins = extrair_asins_do_texto(input_text)
@@ -946,6 +959,7 @@ def index():
         selected_tag=selected_tag,
         tag_a=TAG_A,
         tag_b=TAG_B,
+        tag_c=TAG_C,
     )
 
 
