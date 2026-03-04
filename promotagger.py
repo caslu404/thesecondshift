@@ -658,6 +658,7 @@ TEMPLATE = r"""
       background:linear-gradient(135deg, var(--accent), var(--accent2));
       box-shadow:0 8px 18px rgba(0,0,0,0.10);
       transition:transform 0.25s ease;
+      pointer-events:none;
     }
     .toggle.isB .toggleKnob{ transform:translateX(100%); }
     .toggle.isC .toggleKnob{ transform:translateX(200%); }
@@ -668,6 +669,8 @@ TEMPLATE = r"""
       color:rgba(15,23,42,0.55); z-index:2;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
       padding:0 10px;
+      cursor:pointer;
+      border-radius:999px;
     }
     .toggle .active{ color:rgba(15,23,42,0.95); }
 
@@ -771,9 +774,9 @@ TEMPLATE = r"""
       <div class="toggleWrap">
         <div id="tagToggle" class="toggle {% if selected_tag == tag_b %}isB{% elif selected_tag == tag_c %}isC{% endif %}" role="button" tabindex="0">
           <div class="toggleKnob"></div>
-          <span id="lblA" class="{% if selected_tag == tag_a %}active{% endif %}">{{ tag_a }}</span>
-          <span id="lblB" class="{% if selected_tag == tag_b %}active{% endif %}">{{ tag_b }}</span>
-          <span id="lblC" class="{% if selected_tag == tag_c %}active{% endif %}">{{ tag_c }}</span>
+          <span id="lblA" data-tag="{{ tag_a }}" class="{% if selected_tag == tag_a %}active{% endif %}">{{ tag_a }}</span>
+          <span id="lblB" data-tag="{{ tag_b }}" class="{% if selected_tag == tag_b %}active{% endif %}">{{ tag_b }}</span>
+          <span id="lblC" data-tag="{{ tag_c }}" class="{% if selected_tag == tag_c %}active{% endif %}">{{ tag_c }}</span>
         </div>
       </div>
     </div>
@@ -895,10 +898,25 @@ TEMPLATE = r"""
 
     applyTheme(document.getElementById('selected_tag').value);
 
-    document.getElementById('tagToggle').addEventListener('click', () => {
+    // Mantém o clique no trilho ciclando (igual hoje)
+    document.getElementById('tagToggle').addEventListener('click', (e) => {
+      // Se clicou em uma tag específica, não cicla aqui
+      const t = e.target;
+      if(t && t.dataset && t.dataset.tag){
+        return;
+      }
       const cur = document.getElementById('selected_tag').value;
       const next = (cur === TAG_A) ? TAG_B : (cur === TAG_B) ? TAG_C : TAG_A;
       setToggleUI(next);
+    });
+
+    // Clique direto na tag
+    document.querySelectorAll('#tagToggle span[data-tag]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tag = e.currentTarget.dataset.tag;
+        setToggleUI(tag);
+      });
     });
 
     document.getElementById('formMain').addEventListener('submit', function(){
